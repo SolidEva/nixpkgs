@@ -104,6 +104,14 @@ lib.makeOverridable (
           rootDir ? "",
           # GIT_CONFIG_GLOBAL (as a file)
           gitConfigFile ? config.gitConfigFile,
+          # how many times to retry
+          retryCount ? 0,
+          # base delay in seconds
+          retryDelay ? 10,
+          # backoff factor
+          # used to calculate the actual delay between retries
+          # (<retryDelayFactor>^(currentRetryRound-1) * retryDelay)
+          retryDelayFactor ? 2,
           # Additional stdenvNoCC.mkDerivation arguments.
           # It is typically for derived fetchers to pass down additional arguments,
           # and the specified arguments have lower precedence than other mkDerivation arguments.
@@ -198,6 +206,9 @@ lib.makeOverridable (
             fetchTags
             rootDir
             gitConfigFile
+            retryCount
+            retryDelay
+            retryDelayFactor
             ;
           leaveDotGit =
             if leaveDotGit != null then

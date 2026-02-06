@@ -28,6 +28,10 @@ humanReadableRev=
 commitDate=
 commitDateStrict8601=
 
+retryCount=0
+retryDelay=3 # in seconds, only used if retryCount > 1
+retryDelayFactor=2 # allows exponential backoff. (<retryDelayFactor>^(currentRetryRound-1) * retryDelay)
+
 if test -n "$deepClone"; then
     deepClone=true
 else
@@ -61,6 +65,9 @@ Options:
       --builder       Clone as fetchgit does, but url, rev, and out option are mandatory.
       --no-add-path   Do not actually add the contents of the git repo to the store.
       --root-dir dir  Directory in the repository that will be copied to the output instead of the full repository.
+      --retry-count   Number of times to retry any network failure
+      --retry-delay   Number of seconds to wait before starting a retry
+      --retry-delay-factor Allows exponential backoff.(<retryDelayFactor>^(currentRetryRound-1) * retryDelay)
       --quiet         Only print the final json summary.
 "
     exit 1
@@ -69,6 +76,25 @@ Options:
 # some git commands print to stdout, which would contaminate our JSON output
 clean_git(){
     git "$@" >&2
+}
+
+# backoff and retry logic for git. easier to work with flakey or rate limited remotes
+retry() {
+   local cmd=$*
+   local currentTry=0
+
+   until $cmd
+      do
+         if (( currentTry == retryCount ))
+         then
+            return 1
+         else
+            ((currentTry=currentTry+1))
+            delay=$((retryDelayFactor ** $((currentTry -1)) * retryDelay ))
+            >&2 echo "TRY $currentTry: git encountered an error trying again after a delay of $delay seconds"
+            sleep $delay
+         fi
+   done
 }
 
 argi=0
@@ -93,6 +119,9 @@ for arg; do
             --fetch-tags) fetchTags=true;;
             --builder) builder=true;;
             --no-add-path) noAddPath=true;;
+            --retry-count) argfun=set_retryCount;;
+            --retry-delay) argfun=set_retryDelay;;
+            --retry-delay-factor) argfun=set_retryDelayFactor;;
             --root-dir) argfun=set_rootDir;;
             -h|--help) usage; exit;;
             *)
@@ -139,13 +168,13 @@ init_remote(){
 # Return the reference of an hash if it exists on the remote repository.
 ref_from_hash(){
     local hash=$1
-    git ls-remote origin | sed -n "\,$hash\t, { s,\(.*\)\t\(.*\),\2,; p; q}"
+    retry git ls-remote origin | sed -n "\,$hash\t, { s,\(.*\)\t\(.*\),\2,; p; q}"
 }
 
 # Return the hash of a reference if it exists on the remote repository.
 hash_from_ref(){
     local ref=$1
-    git ls-remote origin | sed -n "\,\t$ref, { s,\(.*\)\t\(.*\),\1,; p; q}"
+    retry git ls-remote origin | sed -n "\,\t$ref, { s,\(.*\)\t\(.*\),\1,; p; q}"
 }
 
 # Returns a name based on the url and reference
@@ -196,14 +225,14 @@ checkout_hash(){
     else
         fetchTargetArgs=(--depth=1 origin "$hash")
     fi
-    if ! clean_git fetch "${fetchTagsArgs[@]}" ${builder:+--progress} "${fetchTargetArgs[@]}"; then
+    if ! retry clean_git fetch "${fetchTagsArgs[@]}" ${builder:+--progress} "${fetchTargetArgs[@]}"; then
         echo "ERROR: \`git fetch' failed." >&2
         # Git remotes using the "dumb" protocol does not support shallow fetch;
         # fall back to deep fetch if shallow fetch failed.
         # TODO(@ShamrockLee): Determine whether the transfer protocol is smart reliably.
         if [[ -z "$deepClone" ]] || [[ -z "$fetchTags" ]]; then
             echo "This might be due to the dumb transfer protocol not supporting shallow fetch or no-tag cloning. Trying with \`--tags' and without \`--depth=1'..." >&2
-            clean_git fetch --tags ${builder:+--progress} origin || return 1
+            retry clean_git fetch --tags ${builder:+--progress} origin || return 1
         else
             return 1
         fi
@@ -242,7 +271,7 @@ checkout_ref(){
 
     if test -n "$ref"; then
         # --depth option is ignored on http repository.
-        clean_git fetch ${builder:+--progress} --depth 1 origin +"$ref" || return 1
+        retry clean_git fetch ${builder:+--progress} --depth 1 origin +"$ref" || return 1
         clean_git checkout -b "$branchName" FETCH_HEAD || return 1
     else
         return 1
@@ -253,8 +282,8 @@ checkout_ref(){
 init_submodules(){
     # shallow with leaveDotGit will change hashes
     [[ -z "$deepClone" ]] && [[ -z "$leaveDotGit" ]] && \
-    clean_git submodule update --init --recursive --checkout -j ${NIX_BUILD_CORES:-1} --progress --depth 1 || \
-    clean_git submodule update --init --recursive --checkout -j ${NIX_BUILD_CORES:-1} --progress
+    retry clean_git submodule update --init --recursive --checkout -j ${NIX_BUILD_CORES:-1} --progress --depth 1 || \
+    retry clean_git submodule update --init --recursive --checkout -j ${NIX_BUILD_CORES:-1} --progress
 }
 
 clone(){
@@ -280,7 +309,7 @@ clone(){
     # The fetched tags are potentially non-reproducible, as tags are mutable parts of the Git tree.
     if [[ -n "$fetchTags" ]]; then
         echo "fetching all tags..." >&2
-        clean_git fetch origin 'refs/tags/*:refs/tags/*' || echo "warning: failed to fetch some tags" >&2
+        retry clean_git fetch origin 'refs/tags/*:refs/tags/*' || echo "warning: failed to fetch some tags" >&2
     fi
 
     # Name tag "$ref" to make `git describe` work reproducibly in `NIX_PREFETCH_GIT_CHECKOUT_HOOK`.

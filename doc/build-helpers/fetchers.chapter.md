@@ -813,6 +813,18 @@ Additionally, the following optional arguments can be given:
 
   ::: {.example #ex-fetchgit-sparseCheckout}
 
+`retryCount` (Integer)
+
+: Number of times to try a download. Useful for some transient network errors and rate limits. Defaults to 0.
+
+`retryDelay` (Integer)
+
+: Number of seconds to wait between retry attempts. Defaults to 10.
+
+`retryDelayFactor` (Integer)
+
+: The base exponential delay factor, used to calculate the exponential backoff. (<retryDelayFactor>^(currentRetryRound-1) * retryDelay) Defaults to 2.
+
   # Use `sparseCheckout` to only include some directories:
 
   ```nix
