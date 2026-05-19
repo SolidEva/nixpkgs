@@ -97,6 +97,7 @@ in
           kernelPatches = [
             kernelPatches.bridge_stp_helper
             kernelPatches.request_key_helper
+            {name = "rk3588-usbc"; patch = ./rk3588-usbc.patch;}
           ];
         };
 
